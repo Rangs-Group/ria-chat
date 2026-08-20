@@ -140,11 +140,11 @@ export default defineConfig(({ command }) => ({
       },
       includeAssets: [],
       manifest: {
-        name: 'LibreChat',
-        short_name: 'LibreChat',
+        name: 'RIA CHAT',
+        short_name: 'RIA CHAT',
         display: 'standalone',
         background_color: '#000000',
-        theme_color: '#009688',
+        theme_color: '#eb0a1e',
         icons: [
           {
             src: 'assets/favicon-32x32.png',

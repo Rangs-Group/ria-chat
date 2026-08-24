@@ -226,7 +226,11 @@ export const roleDefaults = defaultRolesSchema.parse({
       [PermissionTypes.MEMORIES]: {},
       [PermissionTypes.AGENTS]: {
         [Permissions.USE]: true,
-        [Permissions.CREATE]: true,
+        // Unlike SHARE/SHARE_PUBLIC below (already USER-restricted), CREATE
+        // defaulted true for every role until this fix — regular users
+        // could create their own agents with no UI path ever exposing it.
+        // ADMIN keeps CREATE: true (see the ADMIN roleDefaults above).
+        [Permissions.CREATE]: false,
         [Permissions.SHARE]: false,
         [Permissions.SHARE_PUBLIC]: false,
       },

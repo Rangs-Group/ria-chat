@@ -54,12 +54,40 @@ export interface AdminUsersDeps {
     principalType: PrincipalType;
     principalId: string | Types.ObjectId;
   }) => Promise<void>;
+  /** Same service the public register form and the `create-user` CLI script use. */
+  registerUser: (
+    user: {
+      email: string;
+      password: string;
+      confirm_password: string;
+      name: string;
+      username?: string;
+    },
+    additionalData?: { emailVerified?: boolean; role?: string },
+  ) => Promise<{ status: number; message: string }>;
+  updateUser: (userId: string, updateData: Partial<IUser>) => Promise<IUser | null>;
+}
+
+function mapListItem(u: IUser): AdminUserListItem {
+  return {
+    id: u._id?.toString() ?? '',
+    name: u.name ?? '',
+    username: u.username ?? '',
+    email: u.email ?? '',
+    avatar: u.avatar ?? '',
+    role: u.role ?? 'USER',
+    provider: u.provider ?? 'local',
+    createdAt: u.createdAt?.toISOString(),
+    updatedAt: u.updatedAt?.toISOString(),
+  };
 }
 
 export function createAdminUsersHandlers(deps: AdminUsersDeps): {
   listUsers: (req: ServerRequest, res: Response) => Promise<Response>;
   searchUsers: (req: ServerRequest, res: Response) => Promise<Response>;
   deleteUser: (req: ServerRequest, res: Response) => Promise<Response>;
+  createUser: (req: ServerRequest, res: Response) => Promise<Response>;
+  updateUser: (req: ServerRequest, res: Response) => Promise<Response>;
 } {
   const {
     findUsers,
@@ -73,6 +101,8 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps): {
     deleteUserById,
     deleteConfig,
     deleteAclEntries,
+    registerUser,
+    updateUser,
   } = deps;
 
   async function listUsersHandler(req: ServerRequest, res: Response) {
@@ -83,17 +113,7 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps): {
         countUsers(),
       ]);
 
-      const mapped: AdminUserListItem[] = users.map((u) => ({
-        id: u._id?.toString() ?? '',
-        name: u.name ?? '',
-        username: u.username ?? '',
-        email: u.email ?? '',
-        avatar: u.avatar ?? '',
-        role: u.role ?? 'USER',
-        provider: u.provider ?? 'local',
-        createdAt: u.createdAt?.toISOString(),
-        updatedAt: u.updatedAt?.toISOString(),
-      }));
+      const mapped: AdminUserListItem[] = users.map(mapListItem);
 
       return res.status(200).json({ users: mapped, total, limit, offset });
     } catch (error) {
@@ -241,9 +261,127 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps): {
     }
   }
 
+  async function createUserHandler(req: ServerRequest, res: Response) {
+    try {
+      const body = req.body as {
+        email?: string;
+        password?: string;
+        confirm_password?: string;
+        name?: string;
+        username?: string;
+        role?: string;
+      };
+
+      const email = body.email?.trim().toLowerCase() ?? '';
+      const name = body.name?.trim() ?? '';
+      const password = body.password ?? '';
+      const confirmPassword = body.confirm_password ?? '';
+      const username = body.username?.trim() || undefined;
+      const role = body.role === SystemRoles.ADMIN ? SystemRoles.ADMIN : SystemRoles.USER;
+
+      if (!email || !email.includes('@')) {
+        return res.status(400).json({ error: 'A valid email is required' });
+      }
+      if (!name) {
+        return res.status(400).json({ error: 'Name is required' });
+      }
+      if (!password || password !== confirmPassword) {
+        return res.status(400).json({ error: 'Passwords must match' });
+      }
+
+      const existing = await findUsers(
+        { $or: [{ email }, ...(username ? [{ username }] : [])] },
+        '_id',
+        { limit: 1 },
+      );
+      if (existing.length > 0) {
+        return res.status(409).json({ error: 'A user with that email or username already exists' });
+      }
+
+      const result = await registerUser(
+        { email, password, confirm_password: confirmPassword, name, username },
+        { emailVerified: true, role },
+      );
+
+      if (result.status !== 200) {
+        return res.status(result.status).json({ error: result.message });
+      }
+
+      const [created] = await findUsers({ email }, USER_LIST_FIELDS, { limit: 1 });
+      if (!created) {
+        logger.error('[adminUsers] createUser: registerUser reported success but user not found', {
+          email,
+        });
+        return res.status(500).json({ error: 'User creation could not be confirmed' });
+      }
+
+      return res.status(201).json({ user: mapListItem(created) });
+    } catch (error) {
+      logger.error('[adminUsers] createUser error:', error);
+      return res.status(500).json({ error: 'Failed to create user' });
+    }
+  }
+
+  async function updateUserHandler(req: ServerRequest, res: Response) {
+    try {
+      const { id } = req.params as { id: string };
+      if (!isValidObjectIdString(id)) {
+        return res.status(400).json({ error: 'Invalid user ID format' });
+      }
+
+      const body = req.body as { name?: string; role?: string };
+      const updates: Partial<IUser> = {};
+
+      if (body.name !== undefined) {
+        const trimmedName = body.name.trim();
+        if (!trimmedName) {
+          return res.status(400).json({ error: 'Name cannot be empty' });
+        }
+        updates.name = trimmedName;
+      }
+
+      if (body.role !== undefined) {
+        if (body.role !== SystemRoles.ADMIN && body.role !== SystemRoles.USER) {
+          return res.status(400).json({ error: 'Invalid role' });
+        }
+        updates.role = body.role;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'No changes provided' });
+      }
+
+      const [target] = await findUsers({ _id: id }, 'role', { limit: 1 });
+      if (!target) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const isDemotingLastAdmin =
+        target.role === SystemRoles.ADMIN && updates.role === SystemRoles.USER;
+      if (isDemotingLastAdmin) {
+        const adminCount = await countUsers({ role: SystemRoles.ADMIN });
+        if (adminCount <= 1) {
+          return res.status(400).json({ error: 'Cannot demote the last admin user' });
+        }
+      }
+
+      const updated = await updateUser(id, updates);
+      if (!updated) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      return res.status(200).json({ user: mapListItem(updated) });
+    } catch (error) {
+      logger.error('[adminUsers] updateUser error:', error);
+      return res.status(500).json({ error: 'Failed to update user' });
+    }
+  }
+
   return {
     listUsers: listUsersHandler,
     searchUsers: searchUsersHandler,
     deleteUser: deleteUserHandler,
+    createUser: createUserHandler,
+    updateUser: updateUserHandler,
   };
 }

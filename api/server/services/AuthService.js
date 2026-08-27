@@ -558,6 +558,22 @@ const resetPassword = async (userId, token, password) => {
 };
 
 /**
+ * Admin-set Password
+ *
+ * Directly sets a user's password, bypassing the token/email reset flow above.
+ * Used by the admin panel's user-management UI, since this deployment has no
+ * email service configured for self-service reset links.
+ *
+ * @param {string} userId
+ * @param {string} password
+ * @returns {Promise<import('@librechat/data-schemas').IUser | null>}
+ */
+const setUserPassword = async (userId, password) => {
+  const hash = bcrypt.hashSync(password, 10);
+  return updateUser(userId, { password: hash });
+};
+
+/**
  * Reads the previously issued CloudFront cookie scope used for stale cookie cleanup.
  * @param {ServerRequest | null} [req=null]
  * @returns {import('@librechat/api').CloudFrontCookieScope | null}
@@ -914,6 +930,7 @@ module.exports = {
   registerUser,
   setAuthTokens,
   resetPassword,
+  setUserPassword,
   setOpenIDAuthTokens,
   setCloudFrontAuthCookies,
   requestPasswordReset,

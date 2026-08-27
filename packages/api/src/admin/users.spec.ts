@@ -67,6 +67,7 @@ function createDeps(overrides: Partial<AdminUsersDeps> = {}): AdminUsersDeps {
     deleteAclEntries: jest.fn().mockResolvedValue(undefined),
     registerUser: jest.fn().mockResolvedValue({ status: 200, message: 'ok' }),
     updateUser: jest.fn().mockResolvedValue(mockUser()),
+    setPassword: jest.fn().mockResolvedValue(mockUser()),
     ...overrides,
   };
 }
@@ -766,6 +767,62 @@ describe('createAdminUsersHandlers', () => {
 
       expect(status).toHaveBeenCalledWith(400);
       expect(json).toHaveBeenCalledWith({ error: 'No changes provided' });
+    });
+
+    it('sets the password via setPassword and skips updateUser when nothing else changed', async () => {
+      const updated = mockUser();
+      const deps = createDeps({
+        findUsers: jest.fn().mockResolvedValue([mockUser({ role: 'USER' })]),
+        setPassword: jest.fn().mockResolvedValue(updated),
+      });
+      const handlers = createAdminUsersHandlers(deps);
+      const { req, res, status, json } = createReqRes({
+        params: { id: validUserId },
+        body: { password: 'newpassword1', confirm_password: 'newpassword1' },
+      });
+
+      await handlers.updateUser(req, res);
+
+      expect(deps.setPassword).toHaveBeenCalledWith(validUserId, 'newpassword1');
+      expect(deps.updateUser).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(200);
+      expect(json).toHaveBeenCalledWith({ user: expect.objectContaining({ id: expect.any(String) }) });
+    });
+
+    it('applies both name/role updates and a password change in one request', async () => {
+      const deps = createDeps({
+        findUsers: jest.fn().mockResolvedValue([mockUser({ role: 'USER' })]),
+        updateUser: jest.fn().mockResolvedValue(mockUser({ name: 'Renamed' })),
+        setPassword: jest.fn().mockResolvedValue(mockUser({ name: 'Renamed' })),
+      });
+      const handlers = createAdminUsersHandlers(deps);
+      const { req, res, status } = createReqRes({
+        params: { id: validUserId },
+        body: { name: 'Renamed', password: 'newpassword1', confirm_password: 'newpassword1' },
+      });
+
+      await handlers.updateUser(req, res);
+
+      expect(deps.updateUser).toHaveBeenCalledWith(validUserId, { name: 'Renamed' });
+      expect(deps.setPassword).toHaveBeenCalledWith(validUserId, 'newpassword1');
+      expect(status).toHaveBeenCalledWith(200);
+    });
+
+    it('returns 400 when password and confirm_password do not match', async () => {
+      const deps = createDeps({
+        findUsers: jest.fn().mockResolvedValue([mockUser({ role: 'USER' })]),
+      });
+      const handlers = createAdminUsersHandlers(deps);
+      const { req, res, status, json } = createReqRes({
+        params: { id: validUserId },
+        body: { password: 'newpassword1', confirm_password: 'different' },
+      });
+
+      await handlers.updateUser(req, res);
+
+      expect(status).toHaveBeenCalledWith(400);
+      expect(json).toHaveBeenCalledWith({ error: 'Passwords must match' });
+      expect(deps.setPassword).not.toHaveBeenCalled();
     });
   });
 });

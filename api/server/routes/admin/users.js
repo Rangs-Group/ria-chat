@@ -3,7 +3,7 @@ const { createAdminUsersHandlers } = require('@librechat/api');
 const { SystemCapabilities } = require('@librechat/data-schemas');
 const { requireCapability } = require('~/server/middleware/roles/capabilities');
 const { requireJwtAuth } = require('~/server/middleware');
-const { registerUser } = require('~/server/services/AuthService');
+const { registerUser, setUserPassword } = require('~/server/services/AuthService');
 const {
   drainAgentTriggerDeliveriesForUser,
   prepareAgentTriggerUserPurge,
@@ -32,6 +32,7 @@ const handlers = createAdminUsersHandlers({
   deleteAclEntries: db.deleteAclEntries,
   registerUser,
   updateUser: db.updateUser,
+  setPassword: setUserPassword,
 });
 
 router.use(requireJwtAuth, requireAdminAccess);

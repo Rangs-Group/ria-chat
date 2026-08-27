@@ -66,6 +66,8 @@ export interface AdminUsersDeps {
     additionalData?: { emailVerified?: boolean; role?: string },
   ) => Promise<{ status: number; message: string }>;
   updateUser: (userId: string, updateData: Partial<IUser>) => Promise<IUser | null>;
+  /** Hashes and sets a user's password directly (admin-driven, no reset token/email). */
+  setPassword: (userId: string, password: string) => Promise<IUser | null>;
 }
 
 function mapListItem(u: IUser): AdminUserListItem {
@@ -103,6 +105,7 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps): {
     deleteAclEntries,
     registerUser,
     updateUser,
+    setPassword,
   } = deps;
 
   async function listUsersHandler(req: ServerRequest, res: Response) {
@@ -329,7 +332,12 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps): {
         return res.status(400).json({ error: 'Invalid user ID format' });
       }
 
-      const body = req.body as { name?: string; role?: string };
+      const body = req.body as {
+        name?: string;
+        role?: string;
+        password?: string;
+        confirm_password?: string;
+      };
       const updates: Partial<IUser> = {};
 
       if (body.name !== undefined) {
@@ -347,7 +355,14 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps): {
         updates.role = body.role;
       }
 
-      if (Object.keys(updates).length === 0) {
+      const isPasswordChange = body.password !== undefined;
+      if (isPasswordChange) {
+        if (!body.password || body.password !== body.confirm_password) {
+          return res.status(400).json({ error: 'Passwords must match' });
+        }
+      }
+
+      if (Object.keys(updates).length === 0 && !isPasswordChange) {
         return res.status(400).json({ error: 'No changes provided' });
       }
 
@@ -365,12 +380,20 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps): {
         }
       }
 
-      const updated = await updateUser(id, updates);
-      if (!updated) {
+      let updated: IUser | null =
+        Object.keys(updates).length > 0 ? await updateUser(id, updates) : null;
+      if (Object.keys(updates).length > 0 && !updated) {
         return res.status(404).json({ error: 'User not found' });
       }
 
-      return res.status(200).json({ user: mapListItem(updated) });
+      if (isPasswordChange && body.password) {
+        updated = await setPassword(id, body.password);
+        if (!updated) {
+          return res.status(404).json({ error: 'User not found' });
+        }
+      }
+
+      return res.status(200).json({ user: mapListItem(updated as IUser) });
     } catch (error) {
       logger.error('[adminUsers] updateUser error:', error);
       return res.status(500).json({ error: 'Failed to update user' });
